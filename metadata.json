@@ -1,0 +1,6 @@
+{
+  "name": "المعلمة لينا",
+  "description": "تطبيق تعليمي ممتع للأطفال لتعلم مفردات اللغة الإنجليزية مع المعلمة لينا عبر 8 وحدات تعليمية و3 مستويات وبطاقات نطق تفاعلية.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
