@@ -115,18 +115,17 @@ fun TeacherLinaCompanionBar(
         ) {
             Box(
                 modifier = Modifier
-                    .size(64.dp)
+                    .size(68.dp)
                     .offset(y = floatOffset.dp)
                     .scale(speakPulse)
             ) {
                 Surface(
-                    shape = CircleShape,
-                    border = BorderStroke(2.5.dp, MaterialTheme.colorScheme.primary),
+                    shape = RoundedCornerShape(18.dp),
                     shadowElevation = 3.dp,
                     modifier = Modifier.fillMaxSize()
                 ) {
                     Image(
-                        painter = painterResource(id = R.drawable.img_lina_3d_avatar_1795209306681),
+                        painter = painterResource(id = R.drawable.img_lina_original),
                         contentDescription = stringResource(R.string.cd_teacher_lina),
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()

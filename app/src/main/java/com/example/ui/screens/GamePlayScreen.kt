@@ -78,6 +78,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.data.GameQuestion
+import com.example.ui.components.ConfettiBurstOverlay
+import com.example.ui.components.ConfettiShowerOverlay
 import com.example.ui.components.TeacherLinaCompanionBar
 import com.example.ui.theme.FredokaFontFamily
 import com.example.ui.theme.LocalLinaColors
@@ -148,6 +150,12 @@ fun GamePlayScreen(
         state.showHint -> question.hintAr
         state.pairWrongFlash -> "قريب جداً! حاول مطابقة الكلمة الإنجليزية بمعناها الصحيح 🌸"
         else -> question.linaInstructionAr
+    }
+
+    val confettiTriggerKey = when {
+        state.isAnswered && state.isLastCorrect -> "correct_${state.currentIndex}_${state.correctCount}"
+        state.matchedEnglishSet.isNotEmpty() && !state.isAnswered -> "pair_${state.currentIndex}_${state.matchedEnglishSet.size}"
+        else -> null
     }
 
     Scaffold(
@@ -330,6 +338,11 @@ fun GamePlayScreen(
 
                 Spacer(Modifier.height(10.dp))
             }
+
+            ConfettiBurstOverlay(
+                triggerKey = confettiTriggerKey,
+                modifier = Modifier.fillMaxSize()
+            )
         }
     }
 }
@@ -1090,6 +1103,11 @@ private fun GameVictoryScreen(
                     Text("العب بأسئلة جديدة متغيرة", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 }
             }
+
+            ConfettiShowerOverlay(
+                triggerKey = "${titleAr}_${points}_${correctCount}",
+                modifier = Modifier.fillMaxSize()
+            )
         }
     }
 }

@@ -10,17 +10,26 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
+import com.example.audio.AudioContentCategory
+import com.example.audio.AudioDownloadWorker
+import com.example.audio.CurriculumAudioCatalog
+import com.example.audio.HybridAudioManager
 import com.example.audio.PronunciationHelper
 import com.example.audio.SoundEffects
+import com.example.audio.VoicePersona
 import com.example.audio.WordSpeaker
+import com.example.audio.configureAppCheck
 import com.example.data.CurriculumRepository
 import com.example.data.local.LinaDatabase
 import com.example.data.local.LinaLocalRepository
 import com.example.ui.screens.AchievementsScreen
+import com.example.ui.screens.AudioLibraryScreen
 import com.example.ui.screens.BookUnitsScreen
 import com.example.ui.screens.DictionaryScreen
 import com.example.ui.screens.ExamsScreen
@@ -33,16 +42,20 @@ import com.example.ui.screens.UnitDetailScreen
 import com.example.ui.theme.TeacherLinaTheme
 import com.example.viewmodel.AppDestination
 import com.example.viewmodel.LinaViewModel
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
     private lateinit var wordSpeaker: WordSpeaker
+    private lateinit var hybridAudioManager: HybridAudioManager
     private lateinit var soundEffects: SoundEffects
     private lateinit var pronunciationHelper: PronunciationHelper
     private lateinit var viewModel: LinaViewModel
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // App Check MUST be configured before any ViewModel or Firebase AI Logic call
+        configureAppCheck(this, intent)
         enableEdgeToEdge()
 
         wordSpeaker = WordSpeaker(this)
@@ -50,17 +63,33 @@ class MainActivity : ComponentActivity() {
         pronunciationHelper = PronunciationHelper(this)
 
         val database = LinaDatabase.getInstance(applicationContext)
-        val localRepository = LinaLocalRepository(database.progressDao())
+        hybridAudioManager = HybridAudioManager(
+            context = this,
+            cachedAudioDao = database.cachedAudioDao(),
+            voiceSettingsDao = database.voiceSettingsDao(),
+            wordSpeaker = wordSpeaker
+        )
+
+        val localRepository = LinaLocalRepository(
+            dao = database.progressDao(),
+            voiceSettingsDao = database.voiceSettingsDao()
+        )
         viewModel = ViewModelProvider(
             this,
-            LinaViewModel.factory(localRepository)
+            LinaViewModel.factory(localRepository, database.cachedAudioDao())
         )[LinaViewModel::class.java]
 
         setContent {
             val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-            val isSpeaking by wordSpeaker.isSpeaking.collectAsStateWithLifecycle()
+            val isTtsSpeaking by wordSpeaker.isSpeaking.collectAsStateWithLifecycle()
+            val playbackState by hybridAudioManager.playbackState.collectAsStateWithLifecycle()
             val isListening by pronunciationHelper.isListening.collectAsStateWithLifecycle()
             val pronunciationErrorAr by pronunciationHelper.errorMessageAr.collectAsStateWithLifecycle()
+
+            val downloadProgressFlow = remember { AudioDownloadWorker.observeProgress(applicationContext) }
+            val downloadProgress by downloadProgressFlow.collectAsStateWithLifecycle(initialValue = null)
+
+            val isSpeaking = isTtsSpeaking || playbackState.isPlaying
 
             CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
                 TeacherLinaTheme {
@@ -87,7 +116,11 @@ class MainActivity : ComponentActivity() {
                                         viewModel.startUnitGame(unitNum, uiState.selectedLevel)
                                     },
                                     onSpeakWelcome = { text ->
-                                        wordSpeaker.speakArabic(text)
+                                        hybridAudioManager.playEnglish(
+                                            textEn = text,
+                                            unitNumber = 0,
+                                            category = AudioContentCategory.SENTENCE
+                                        )
                                     }
                                 )
                             }
@@ -118,9 +151,19 @@ class MainActivity : ComponentActivity() {
                                         viewModel.startUnitExam(unit.number)
                                     },
                                     onSpeakEnglish = { text ->
-                                        wordSpeaker.speakEnglish(text)
+                                        val isStoryLike = text.length > 90
+                                        hybridAudioManager.playEnglish(
+                                            textEn = text,
+                                            unitNumber = unit.number,
+                                            category = if (isStoryLike) AudioContentCategory.STORY else AudioContentCategory.SENTENCE,
+                                            personaOverride = if (isStoryLike) VoicePersona.MISS_EMMA else null,
+                                            preferExpressiveGemini = isStoryLike
+                                        )
                                     },
-                                    onBack = { viewModel.navigateBack() }
+                                    onBack = {
+                                        hybridAudioManager.stopAllPlayback()
+                                        viewModel.navigateBack()
+                                    }
                                 )
                             }
 
@@ -169,10 +212,16 @@ class MainActivity : ComponentActivity() {
                                             onFinished = { soundEffects.playCelebration() }
                                         )
                                     },
-                                    onSpeakEnglish = { wordSpeaker.speakEnglish(it) },
+                                    onSpeakEnglish = { text ->
+                                        hybridAudioManager.playEnglish(
+                                            textEn = text,
+                                            unitNumber = activeSession.unitNumber,
+                                            category = AudioContentCategory.EXERCISE
+                                        )
+                                    },
                                     onPlayAgain = { viewModel.replayCurrentGame() },
                                     onExit = {
-                                        wordSpeaker.stop()
+                                        hybridAudioManager.stopAllPlayback()
                                         viewModel.navigateBack()
                                     }
                                 )
@@ -187,7 +236,13 @@ class MainActivity : ComponentActivity() {
                                     onToggleMeaning = { viewModel.toggleFlashcardMeaning() },
                                     onPrevious = { viewModel.previousFlashcard() },
                                     onNext = { viewModel.nextFlashcard() },
-                                    onSpeakWord = { wordSpeaker.speakEnglish(it) },
+                                    onSpeakWord = { text ->
+                                        hybridAudioManager.playEnglish(
+                                            textEn = text,
+                                            unitNumber = activeFlashcards.unit.number,
+                                            category = AudioContentCategory.WORD
+                                        )
+                                    },
                                     onStartQuiz = {
                                         viewModel.startUnitGame(
                                             activeFlashcards.unit.number,
@@ -195,7 +250,7 @@ class MainActivity : ComponentActivity() {
                                         )
                                     },
                                     onExit = {
-                                        wordSpeaker.stop()
+                                        hybridAudioManager.stopAllPlayback()
                                         viewModel.navigateBack()
                                     }
                                 )
@@ -204,14 +259,56 @@ class MainActivity : ComponentActivity() {
                             AppDestination.ListenAndSpeak -> {
                                 ListenAndSpeakScreen(
                                     tracks = uiState.listeningTracks,
+                                    dialogues = CurriculumAudioCatalog.allDialogues,
+                                    playbackState = playbackState,
                                     isSpeaking = isSpeaking,
                                     isListening = isListening,
                                     pronunciationResult = uiState.lastPronunciationResult,
                                     pronunciationErrorAr = pronunciationErrorAr,
-                                    onSpeakEnglish = { wordSpeaker.speakEnglish(it) },
-                                    onStopSpeaking = { wordSpeaker.stop() },
+                                    onSpeakEnglish = { text ->
+                                        hybridAudioManager.playEnglish(
+                                            textEn = text,
+                                            unitNumber = 0,
+                                            category = AudioContentCategory.WORD
+                                        )
+                                    },
+                                    onPlayTrack = { track ->
+                                        hybridAudioManager.playEnglish(
+                                            textEn = track.scriptEn,
+                                            unitNumber = track.unitNumber,
+                                            lessonNumber = 6,
+                                            category = AudioContentCategory.LISTENING_TRACK,
+                                            personaOverride = VoicePersona.MISS_EMMA,
+                                            preferExpressiveGemini = true
+                                        )
+                                    },
+                                    onPracticeWord = { unitNum, wordEn ->
+                                        hybridAudioManager.playEnglish(
+                                            textEn = wordEn,
+                                            unitNumber = unitNum,
+                                            category = AudioContentCategory.WORD,
+                                            forcePracticeSequence = true
+                                        )
+                                    },
+                                    onPlayFullDialogue = { script ->
+                                        hybridAudioManager.playFullDialogue(script)
+                                    },
+                                    onPlayDialogueTurn = { script, turnIdx ->
+                                        hybridAudioManager.playDialogueTurn(script, turnIdx)
+                                    },
+                                    onStartStudentRecording = {
+                                        hybridAudioManager.startStudentRecording()
+                                    },
+                                    onStopStudentRecording = {
+                                        hybridAudioManager.stopStudentRecording()
+                                    },
+                                    onPlayStudentRecording = {
+                                        hybridAudioManager.playStudentRecording()
+                                    },
+                                    onStopSpeaking = { hybridAudioManager.stopAllPlayback() },
                                     onStartPronunciation = { target ->
-                                        wordSpeaker.stop()
+                                        hybridAudioManager.stopAllPlayback()
+                                        hybridAudioManager.stopStudentRecording()
                                         pronunciationHelper.startListening(target) { result ->
                                             if (result.isSuccess) soundEffects.playCorrect()
                                             else soundEffects.playWrong()
@@ -220,7 +317,16 @@ class MainActivity : ComponentActivity() {
                                     },
                                     onStopPronunciation = { pronunciationHelper.stopListening() },
                                     onClearPronunciationResult = { viewModel.clearPronunciationResult() },
-                                    onBack = { viewModel.navigateHome() }
+                                    onDismissAudioNotice = { hybridAudioManager.clearNotice() },
+                                    onOpenAudioLibrary = {
+                                        hybridAudioManager.stopAllPlayback()
+                                        viewModel.navigateTo(AppDestination.AudioLibrary)
+                                    },
+                                    onBack = {
+                                        hybridAudioManager.stopAllPlayback()
+                                        hybridAudioManager.stopStudentRecording()
+                                        viewModel.navigateHome()
+                                    }
                                 )
                             }
 
@@ -228,9 +334,18 @@ class MainActivity : ComponentActivity() {
                                 DictionaryScreen(
                                     words = uiState.dictionaryWords,
                                     isSpeaking = isSpeaking,
-                                    onSpeakEnglish = { wordSpeaker.speakEnglish(it) },
+                                    onSpeakEnglish = { text ->
+                                        val matchingUnit = uiState.dictionaryWords
+                                            .firstOrNull { it.english.equals(text, ignoreCase = true) || it.exampleSentence == text }
+                                            ?.unitNumber ?: 0
+                                        hybridAudioManager.playEnglish(
+                                            textEn = text,
+                                            unitNumber = matchingUnit,
+                                            category = if (text.contains(" ")) AudioContentCategory.SENTENCE else AudioContentCategory.WORD
+                                        )
+                                    },
                                     onBack = {
-                                        wordSpeaker.stop()
+                                        hybridAudioManager.stopAllPlayback()
                                         viewModel.navigateHome()
                                     }
                                 )
@@ -264,6 +379,57 @@ class MainActivity : ComponentActivity() {
                                     onBack = { viewModel.navigateHome() }
                                 )
                             }
+
+                            AppDestination.AudioLibrary -> {
+                                AudioLibraryScreen(
+                                    uiState = uiState,
+                                    playbackState = playbackState,
+                                    downloadProgress = downloadProgress,
+                                    onSelectAccent = { viewModel.setVoiceAccent(it) },
+                                    onSelectPersona = { viewModel.setVoicePersona(it) },
+                                    onSelectSpeechMode = { viewModel.setSpeechMode(it) },
+                                    onSelectEngine = { viewModel.setVoiceEngine(it) },
+                                    onSaveCloudEndpoint = { viewModel.setCloudTtsEndpointUrl(it) },
+                                    onPreviewPersona = { persona ->
+                                        val sample = when (persona) {
+                                            VoicePersona.MISS_LILY -> "Hello! I am Miss Lily. Let's practise our English words clearly together!"
+                                            VoicePersona.MISS_EMMA -> "Hello! I am Miss Emma. Let's read an exciting story from English for Iraq!"
+                                            VoicePersona.MR_JOHN -> "Good morning! I am Mr. John. Let's practise our classroom dialogues!"
+                                            VoicePersona.KIDS_VOICE -> "Hi! I am your study friend! Let's play and learn English together!"
+                                        }
+                                        hybridAudioManager.playEnglish(
+                                            textEn = sample,
+                                            unitNumber = 0,
+                                            category = AudioContentCategory.SENTENCE,
+                                            personaOverride = persona,
+                                            preferExpressiveGemini = persona == VoicePersona.MISS_EMMA
+                                        )
+                                    },
+                                    onDownloadUnit = { unitNum ->
+                                        AudioDownloadWorker.enqueueDownload(this@MainActivity, unitNum)
+                                    },
+                                    onDownloadAll = {
+                                        AudioDownloadWorker.enqueueDownload(this@MainActivity, 0)
+                                    },
+                                    onPauseDownload = {
+                                        AudioDownloadWorker.pauseDownload(this@MainActivity)
+                                    },
+                                    onDeleteUnitAudio = { unitNum ->
+                                        lifecycleScope.launch {
+                                            hybridAudioManager.deleteUnitAudio(unitNum)
+                                        }
+                                    },
+                                    onDeleteAllAudio = {
+                                        lifecycleScope.launch {
+                                            hybridAudioManager.deleteAllAudio()
+                                        }
+                                    },
+                                    onBack = {
+                                        hybridAudioManager.stopAllPlayback()
+                                        viewModel.navigateHome()
+                                    }
+                                )
+                            }
                         }
                     }
                 }
@@ -272,6 +438,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        hybridAudioManager.release()
         wordSpeaker.shutdown()
         soundEffects.release()
         pronunciationHelper.stopListening()

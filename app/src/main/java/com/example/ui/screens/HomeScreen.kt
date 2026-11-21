@@ -42,6 +42,7 @@ import androidx.compose.material.icons.rounded.AutoStories
 import androidx.compose.material.icons.rounded.EmojiEvents
 import androidx.compose.material.icons.rounded.FamilyRestroom
 import androidx.compose.material.icons.rounded.Hearing
+import androidx.compose.material.icons.rounded.RecordVoiceOver
 import androidx.compose.material.icons.rounded.SportsEsports
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material3.Card
@@ -168,6 +169,15 @@ fun HomeScreen(
             icon = Icons.Rounded.FamilyRestroom,
             accentIndex = 5,
             destination = AppDestination.ParentDashboard
+        ),
+        HubMenuCardItem(
+            tag = "hub_audio_library",
+            titleAr = "مكتبة الأصوات الذكية",
+            subtitleAr = "${uiState.voicePersona.displayNameEn} • ${uiState.voiceAccent.code} • تنزيل دون إنترنت",
+            emoji = "🎙️",
+            icon = Icons.Rounded.RecordVoiceOver,
+            accentIndex = 7,
+            destination = AppDestination.AudioLibrary
         )
     )
 
@@ -350,17 +360,17 @@ private fun TeacherLinaHeroHeader(
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(92.dp)
+                            .size(104.dp)
                             .offset(y = bobY.dp)
                     ) {
                         Surface(
-                            shape = CircleShape,
-                            border = BorderStroke(3.dp, linaColors.starContainer),
+                            shape = RoundedCornerShape(24.dp),
+                            color = Color.White,
                             shadowElevation = 6.dp,
                             modifier = Modifier.fillMaxSize()
                         ) {
                             Image(
-                                painter = painterResource(id = R.drawable.img_lina_3d_avatar_1795209306681),
+                                painter = painterResource(id = R.drawable.img_lina_original),
                                 contentDescription = stringResource(R.string.cd_teacher_lina),
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier.fillMaxSize()

@@ -3,21 +3,30 @@ package com.example.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.audio.CurriculumAudioCatalog
 import com.example.audio.PronunciationResult
+import com.example.audio.SpeechMode
+import com.example.audio.UnitAudioStats
+import com.example.audio.VoiceAccent
+import com.example.audio.VoiceEnginePreference
+import com.example.audio.VoicePersona
 import com.example.data.BookUnit
 import com.example.data.BookWord
 import com.example.data.CurriculumRepository
 import com.example.data.DifficultyLevel
 import com.example.data.GameQuestion
 import com.example.data.ListeningTrack
+import com.example.data.local.CachedAudioDao
 import com.example.data.local.ChildProfileEntity
 import com.example.data.local.ExamResultEntity
 import com.example.data.local.LinaLocalRepository
 import com.example.data.local.UnitProgressEntity
+import com.example.data.local.VoiceSettingsEntity
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -41,6 +50,7 @@ sealed interface AppDestination {
     data object Achievements : AppDestination
     data object Exams : AppDestination
     data object ParentDashboard : AppDestination
+    data object AudioLibrary : AppDestination
 }
 
 data class GameSessionState(
@@ -92,10 +102,26 @@ data class LinaUiState(
     val dictionaryWords: List<BookWord> = CurriculumRepository.dictionary,
     val listeningTracks: List<ListeningTrack> = CurriculumRepository.allListeningTracks,
     val destination: AppDestination = AppDestination.Home,
-    val lastPronunciationResult: PronunciationResult? = null
+    val lastPronunciationResult: PronunciationResult? = null,
+    val voiceSettings: VoiceSettingsEntity = VoiceSettingsEntity(),
+    val unitAudioStats: Map<Int, UnitAudioStats> = emptyMap(),
+    val totalDownloadedAudioCount: Int = 0,
+    val totalDownloadedAudioBytes: Long = 0L
 ) {
     val selectedLevel: DifficultyLevel
         get() = DifficultyLevel.fromId(profile.selectedLevel)
+
+    val voiceAccent: VoiceAccent
+        get() = VoiceAccent.fromCode(voiceSettings.accentCode)
+
+    val voicePersona: VoicePersona
+        get() = VoicePersona.fromId(voiceSettings.personaId)
+
+    val speechMode: SpeechMode
+        get() = SpeechMode.fromId(voiceSettings.speechModeId)
+
+    val voiceEnginePreference: VoiceEnginePreference
+        get() = VoiceEnginePreference.fromId(voiceSettings.enginePreferenceId)
 
     val completedUnitsCount: Int
         get() = unitProgressMap.values.count { it.hasMedal }
@@ -114,7 +140,8 @@ data class LinaUiState(
 }
 
 class LinaViewModel(
-    private val localRepository: LinaLocalRepository
+    private val localRepository: LinaLocalRepository,
+    private val cachedAudioDao: CachedAudioDao? = null
 ) : ViewModel() {
 
     private val destinationFlow = MutableStateFlow<AppDestination>(AppDestination.Home)
@@ -127,7 +154,7 @@ class LinaViewModel(
         }
     }
 
-    val uiState: StateFlow<LinaUiState> = combine(
+    private val coreStateFlow = combine(
         localRepository.profileFlow,
         localRepository.unitProgressFlow,
         localRepository.examResultsFlow,
@@ -143,6 +170,42 @@ class LinaViewModel(
             listeningTracks = CurriculumRepository.allListeningTracks,
             destination = dest,
             lastPronunciationResult = pronResult
+        )
+    }
+
+    private val audioMetaFlow = combine(
+        localRepository.voiceSettingsFlow ?: flowOf(VoiceSettingsEntity()),
+        cachedAudioDao?.observeAllAudio() ?: flowOf(emptyList())
+    ) { settings, cachedList ->
+        val safeSettings = settings ?: VoiceSettingsEntity()
+        val byUnit = cachedList.groupBy { it.unitNumber }
+        val statsMap = (1..8).associateWith { u ->
+            val total = CurriculumAudioCatalog.itemsForUnit(u).size
+            val entries = byUnit[u].orEmpty()
+            val uniqueDownloaded = entries
+                .map { "${it.category}|${it.textEn.trim().lowercase()}" }
+                .distinct()
+                .size
+                .coerceAtMost(total)
+            UnitAudioStats(
+                unitNumber = u,
+                totalItems = total,
+                downloadedItems = uniqueDownloaded,
+                totalSizeBytes = entries.sumOf { it.fileSizeBytes }
+            )
+        }
+        Triple(safeSettings, statsMap, cachedList.size to cachedList.sumOf { it.fileSizeBytes })
+    }
+
+    val uiState: StateFlow<LinaUiState> = combine(
+        coreStateFlow,
+        audioMetaFlow
+    ) { base, (settings, statsMap, totals) ->
+        base.copy(
+            voiceSettings = settings,
+            unitAudioStats = statsMap,
+            totalDownloadedAudioCount = totals.first,
+            totalDownloadedAudioBytes = totals.second
         )
     }.stateIn(
         scope = viewModelScope,
@@ -193,6 +256,36 @@ class LinaViewModel(
     fun resetAllProgress() {
         viewModelScope.launch {
             localRepository.resetAllProgress()
+        }
+    }
+
+    fun setVoiceAccent(accent: VoiceAccent) {
+        viewModelScope.launch {
+            localRepository.updateVoiceSettings { it.copy(accentCode = accent.code) }
+        }
+    }
+
+    fun setVoicePersona(persona: VoicePersona) {
+        viewModelScope.launch {
+            localRepository.updateVoiceSettings { it.copy(personaId = persona.id) }
+        }
+    }
+
+    fun setSpeechMode(mode: SpeechMode) {
+        viewModelScope.launch {
+            localRepository.updateVoiceSettings { it.copy(speechModeId = mode.id) }
+        }
+    }
+
+    fun setVoiceEngine(preference: VoiceEnginePreference) {
+        viewModelScope.launch {
+            localRepository.updateVoiceSettings { it.copy(enginePreferenceId = preference.id) }
+        }
+    }
+
+    fun setCloudTtsEndpointUrl(url: String) {
+        viewModelScope.launch {
+            localRepository.updateVoiceSettings { it.copy(cloudTtsEndpointUrl = url.trim()) }
         }
     }
 
@@ -534,11 +627,14 @@ class LinaViewModel(
     companion object {
         private const val STARS_PER_CORRECT = 10
 
-        fun factory(repository: LinaLocalRepository): ViewModelProvider.Factory =
+        fun factory(
+            repository: LinaLocalRepository,
+            cachedAudioDao: CachedAudioDao? = null
+        ): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                    return LinaViewModel(repository) as T
+                    return LinaViewModel(repository, cachedAudioDao) as T
                 }
             }
     }

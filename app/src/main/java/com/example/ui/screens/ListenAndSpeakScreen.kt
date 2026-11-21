@@ -34,7 +34,10 @@ import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Hearing
 import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Replay
 import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -75,10 +78,13 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.example.audio.AudioPlaybackUiState
+import com.example.audio.DialogueScript
 import com.example.audio.PronunciationResult
 import com.example.data.BookWord
 import com.example.data.CurriculumRepository
 import com.example.data.ListeningTrack
+import com.example.ui.components.ConfettiBurstOverlay
 import com.example.ui.components.TeacherLinaCompanionBar
 import com.example.ui.theme.FredokaFontFamily
 import com.example.ui.theme.LocalLinaColors
@@ -88,20 +94,39 @@ import com.example.viewmodel.LinaMood
 @Composable
 fun ListenAndSpeakScreen(
     tracks: List<ListeningTrack>,
+    dialogues: List<DialogueScript>,
+    playbackState: AudioPlaybackUiState,
     isSpeaking: Boolean,
     isListening: Boolean,
     pronunciationResult: PronunciationResult?,
     pronunciationErrorAr: String?,
     onSpeakEnglish: (String) -> Unit,
+    onPlayTrack: (ListeningTrack) -> Unit,
+    onPracticeWord: (Int, String) -> Unit,
+    onPlayFullDialogue: (DialogueScript) -> Unit,
+    onPlayDialogueTurn: (DialogueScript, Int) -> Unit,
+    onStartStudentRecording: () -> Unit,
+    onStopStudentRecording: () -> Unit,
+    onPlayStudentRecording: () -> Unit,
     onStopSpeaking: () -> Unit,
     onStartPronunciation: (String) -> Unit,
     onStopPronunciation: () -> Unit,
     onClearPronunciationResult: () -> Unit,
+    onDismissAudioNotice: () -> Unit,
+    onOpenAudioLibrary: () -> Unit,
     onBack: () -> Unit
 ) {
     BackHandler(onBack = onBack)
 
-    var selectedTab by remember { mutableIntStateOf(0) } // 0 = Tracks, 1 = Pronunciation Coach
+    var selectedTab by remember { mutableIntStateOf(0) } // 0 = Tracks, 1 = Pronunciation Coach, 2 = Multi-speaker Dialogues & Stories
+    var listeningCorrectTrigger by remember { mutableStateOf<String?>(null) }
+
+    val confettiKey: Any? = when {
+        selectedTab == 1 && pronunciationResult?.isSuccess == true ->
+            "pron_${pronunciationResult.targetText}_${pronunciationResult.accuracyPercent}"
+        selectedTab == 0 -> listeningCorrectTrigger
+        else -> null
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -114,6 +139,7 @@ fun ListenAndSpeakScreen(
                         onClick = {
                             onStopSpeaking()
                             onStopPronunciation()
+                            onStopStudentRecording()
                             onBack()
                         },
                         modifier = Modifier.testTag("listen_speak_back_button")
@@ -121,60 +147,109 @@ fun ListenAndSpeakScreen(
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "رجوع")
                     }
                 },
+                actions = {
+                    IconButton(
+                        onClick = onOpenAudioLibrary,
+                        modifier = Modifier.testTag("listen_open_audio_library_button")
+                    ) {
+                        Icon(Icons.Rounded.Tune, contentDescription = "إعدادات ومكتبة الأصوات")
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background)
             )
         }
     ) { innerPadding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .padding(innerPadding)
         ) {
-            TabRow(
-                selectedTabIndex = selectedTab,
-                modifier = Modifier.widthIn(max = 820.dp),
-                containerColor = MaterialTheme.colorScheme.background
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Tab(
-                    selected = selectedTab == 0,
-                    onClick = {
-                        onStopPronunciation()
-                        selectedTab = 0
-                    },
-                    modifier = Modifier.testTag("tab_listening_tracks"),
-                    text = { Text("🎧 نصوص الاستماع", fontWeight = FontWeight.Bold) }
+                TabRow(
+                    selectedTabIndex = selectedTab,
+                    modifier = Modifier.widthIn(max = 820.dp),
+                    containerColor = MaterialTheme.colorScheme.background
+                ) {
+                    Tab(
+                        selected = selectedTab == 0,
+                        onClick = {
+                            onStopPronunciation()
+                            onStopStudentRecording()
+                            selectedTab = 0
+                        },
+                        modifier = Modifier.testTag("tab_listening_tracks"),
+                        text = { Text("🎧 الاستماع", fontWeight = FontWeight.Bold) }
+                    )
+                    Tab(
+                        selected = selectedTab == 1,
+                        onClick = {
+                            onStopSpeaking()
+                            selectedTab = 1
+                        },
+                        modifier = Modifier.testTag("tab_pronunciation_coach"),
+                        text = { Text("🎤 النطق", fontWeight = FontWeight.Bold) }
+                    )
+                    Tab(
+                        selected = selectedTab == 2,
+                        onClick = {
+                            onStopPronunciation()
+                            onStopStudentRecording()
+                            selectedTab = 2
+                        },
+                        modifier = Modifier.testTag("tab_dialogues_stories"),
+                        text = { Text("💬 المحادثات", fontWeight = FontWeight.Bold) }
+                    )
+                }
+
+                HybridPlaybackStatusBanner(
+                    playbackState = playbackState,
+                    onOpenAudioLibrary = onOpenAudioLibrary,
+                    onDismissNotice = onDismissAudioNotice,
+                    modifier = Modifier.widthIn(max = 820.dp)
                 )
-                Tab(
-                    selected = selectedTab == 1,
-                    onClick = {
-                        onStopSpeaking()
-                        selectedTab = 1
-                    },
-                    modifier = Modifier.testTag("tab_pronunciation_coach"),
-                    text = { Text("🎤 تدرّب على النطق", fontWeight = FontWeight.Bold) }
-                )
+
+                when (selectedTab) {
+                    0 -> ListeningTracksTab(
+                        tracks = tracks,
+                        isSpeaking = isSpeaking || playbackState.isPlaying,
+                        onPlayTrack = onPlayTrack,
+                        onStopSpeaking = onStopSpeaking,
+                        onCorrectTrackAnswer = { trackNum ->
+                            listeningCorrectTrigger = "track_${trackNum}_${System.currentTimeMillis()}"
+                        }
+                    )
+                    1 -> PronunciationCoachTab(
+                        playbackState = playbackState,
+                        isSpeaking = isSpeaking || playbackState.isPlaying,
+                        isListening = isListening,
+                        pronunciationResult = pronunciationResult,
+                        pronunciationErrorAr = pronunciationErrorAr,
+                        onSpeakEnglish = onSpeakEnglish,
+                        onPracticeWord = onPracticeWord,
+                        onStartStudentRecording = onStartStudentRecording,
+                        onStopStudentRecording = onStopStudentRecording,
+                        onPlayStudentRecording = onPlayStudentRecording,
+                        onStartPronunciation = onStartPronunciation,
+                        onStopPronunciation = onStopPronunciation,
+                        onClearResult = onClearPronunciationResult
+                    )
+                    else -> DialoguesAndStoriesTab(
+                        dialogues = dialogues,
+                        playbackState = playbackState,
+                        onPlayFullDialogue = onPlayFullDialogue,
+                        onPlayDialogueTurn = onPlayDialogueTurn,
+                        onStopSpeaking = onStopSpeaking
+                    )
+                }
             }
 
-            if (selectedTab == 0) {
-                ListeningTracksTab(
-                    tracks = tracks,
-                    isSpeaking = isSpeaking,
-                    onSpeakEnglish = onSpeakEnglish,
-                    onStopSpeaking = onStopSpeaking
-                )
-            } else {
-                PronunciationCoachTab(
-                    isSpeaking = isSpeaking,
-                    isListening = isListening,
-                    pronunciationResult = pronunciationResult,
-                    pronunciationErrorAr = pronunciationErrorAr,
-                    onSpeakEnglish = onSpeakEnglish,
-                    onStartPronunciation = onStartPronunciation,
-                    onStopPronunciation = onStopPronunciation,
-                    onClearResult = onClearPronunciationResult
-                )
-            }
+            ConfettiBurstOverlay(
+                triggerKey = confettiKey,
+                modifier = Modifier.fillMaxSize()
+            )
         }
     }
 }
@@ -183,8 +258,9 @@ fun ListenAndSpeakScreen(
 private fun ListeningTracksTab(
     tracks: List<ListeningTrack>,
     isSpeaking: Boolean,
-    onSpeakEnglish: (String) -> Unit,
-    onStopSpeaking: () -> Unit
+    onPlayTrack: (ListeningTrack) -> Unit,
+    onStopSpeaking: () -> Unit,
+    onCorrectTrackAnswer: (Int) -> Unit
 ) {
     var selectedUnitFilter by remember { mutableIntStateOf(0) } // 0 = All
     val answeredTracks = remember { mutableStateMapOf<Int, String>() }
@@ -237,8 +313,14 @@ private fun ListeningTracksTab(
             ListeningTrackCard(
                 track = track,
                 selectedOption = answeredTracks[track.trackNumber],
-                onSelectOption = { answeredTracks[track.trackNumber] = it },
-                onPlay = { onSpeakEnglish(track.scriptEn) },
+                onSelectOption = { choice ->
+                    val alreadyAnswered = answeredTracks.containsKey(track.trackNumber)
+                    answeredTracks[track.trackNumber] = choice
+                    if (!alreadyAnswered && choice == track.correctAnswer) {
+                        onCorrectTrackAnswer(track.trackNumber)
+                    }
+                },
+                onPlay = { onPlayTrack(track) },
                 onStop = onStopSpeaking
             )
         }
@@ -456,11 +538,16 @@ private fun ListeningTrackCard(
 
 @Composable
 private fun PronunciationCoachTab(
+    playbackState: AudioPlaybackUiState,
     isSpeaking: Boolean,
     isListening: Boolean,
     pronunciationResult: PronunciationResult?,
     pronunciationErrorAr: String?,
     onSpeakEnglish: (String) -> Unit,
+    onPracticeWord: (Int, String) -> Unit,
+    onStartStudentRecording: () -> Unit,
+    onStopStudentRecording: () -> Unit,
+    onPlayStudentRecording: () -> Unit,
     onStartPronunciation: (String) -> Unit,
     onStopPronunciation: () -> Unit,
     onClearResult: () -> Unit
@@ -478,17 +565,23 @@ private fun PronunciationCoachTab(
     val currentWord = unitWords.getOrNull(practiceIndex) ?: unitWords.firstOrNull()
 
     var pendingTargetToRecord by remember { mutableStateOf<String?>(null) }
+    var pendingSelfCompareRecord by remember { mutableStateOf(false) }
 
     val audioPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
             permissionDeniedNote = false
-            pendingTargetToRecord?.let { onStartPronunciation(it) }
+            if (pendingSelfCompareRecord) {
+                onStartStudentRecording()
+            } else {
+                pendingTargetToRecord?.let { onStartPronunciation(it) }
+            }
         } else {
             permissionDeniedNote = true
         }
         pendingTargetToRecord = null
+        pendingSelfCompareRecord = false
     }
 
     fun requestRecordFor(targetText: String) {
@@ -501,7 +594,24 @@ private fun PronunciationCoachTab(
             permissionDeniedNote = false
             onStartPronunciation(targetText)
         } else {
+            pendingSelfCompareRecord = false
             pendingTargetToRecord = targetText
+            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    fun requestSelfCompareRecording() {
+        val granted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (granted) {
+            permissionDeniedNote = false
+            onStartStudentRecording()
+        } else {
+            pendingTargetToRecord = null
+            pendingSelfCompareRecord = true
             audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
@@ -651,6 +761,19 @@ private fun PronunciationCoachTab(
                             }
                         }
 
+                        // 2-Second Guided Word Practice Sequence (Speak -> Pause 2s -> Repeat + Replay)
+                        FilledTonalButton(
+                            onClick = { onPracticeWord(selectedUnit, currentWord.english) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
+                                .testTag("pronounce_practice_repeat_button")
+                        ) {
+                            Icon(Icons.Rounded.Replay, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("تدريب الترديد (استماع + 2 ثانية + إعادة) 🔁", fontWeight = FontWeight.Bold)
+                        }
+
                         if (currentWord.exampleSentence.isNotBlank()) {
                             OutlinedButton(
                                 onClick = {
@@ -665,6 +788,84 @@ private fun PronunciationCoachTab(
                                 Icon(Icons.Rounded.Hearing, contentDescription = null)
                                 Spacer(Modifier.width(8.dp))
                                 Text("تحدّي نطق الجملة كاملة 🎤")
+                            }
+                        }
+
+                        // Student voice recording & honest self-comparison section
+                        Surface(
+                            shape = MaterialTheme.shapes.medium,
+                            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f),
+                            border = BorderStroke(1.dp, linaColors.cardBorder),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("student_self_compare_card")
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = "🎙️ سجّل صوتك وقارنه بنطق المعلمة",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "استمع لصوتك بعد التسجيل وقارنه بالنموذج الصوتي للمعلمة لتطوير مخارج الحروف بصدق ووضوح (التعرف الآلي يساعد تقريبياً فقط، والمقارنة السمعية المباشرة هي الأدق).",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Button(
+                                        onClick = {
+                                            if (playbackState.isRecordingStudent) {
+                                                onStopStudentRecording()
+                                            } else {
+                                                onStopPronunciation()
+                                                requestSelfCompareRecording()
+                                            }
+                                        },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (playbackState.isRecordingStudent) linaColors.wrong else MaterialTheme.colorScheme.secondary
+                                        ),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(48.dp)
+                                            .testTag("student_record_voice_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = if (playbackState.isRecordingStudent) Icons.Rounded.Stop else Icons.Rounded.Mic,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(Modifier.width(4.dp))
+                                        Text(
+                                            text = if (playbackState.isRecordingStudent) "إيقاف التسجيل" else "سجّل صوتك",
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+
+                                    FilledTonalButton(
+                                        onClick = onPlayStudentRecording,
+                                        enabled = playbackState.hasStudentRecording && !playbackState.isRecordingStudent,
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(48.dp)
+                                            .testTag("student_play_recording_button")
+                                    ) {
+                                        Icon(Icons.Rounded.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text(
+                                            text = if (playbackState.isPlayingStudentRecording) "جاري التشغيل..." else "اسمع تسجيلك",
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
                             }
                         }
                     }

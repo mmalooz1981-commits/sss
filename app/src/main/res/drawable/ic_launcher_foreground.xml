@@ -3,6 +3,6 @@
     <item
         android:width="66dp"
         android:height="66dp"
-        android:drawable="@drawable/img_lina_launcher_clean"
+        android:drawable="@drawable/img_lina_original"
         android:gravity="center" />
 </layer-list>
